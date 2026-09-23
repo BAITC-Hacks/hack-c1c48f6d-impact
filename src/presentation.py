@@ -41,12 +41,9 @@ def representative_examples(recommendations):
         candidates = recommendations.loc[score.gt(threshold)].assign(_score=score)
         if candidates.empty:
             continue
-        candidates["_metadata_complete"] = ~candidates.get(
-            "product_metadata_missing", pd.Series(False, index=candidates.index)
-        ).fillna(True)
         chosen = candidates.sort_values(
-            ["_metadata_complete", "_score", "supplier", "sku"],
-            ascending=[False, False, True, True],
+            ["_score", "supplier", "sku"],
+            ascending=[False, True, True],
             kind="stable",
         ).iloc[0]
         examples[label] = f"{chosen.supplier} · {chosen.sku}"

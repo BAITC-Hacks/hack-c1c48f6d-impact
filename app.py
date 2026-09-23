@@ -242,9 +242,7 @@ if selected:
             )
         )
         st.markdown(
-            f"- **Historical one-off demand excluded:** "
-            f"{display_value(row.outlier_quantity_removed)} units across "
-            f"{int(row.anomaly_count):,} anomaly days\n"
+            f"- **Anomaly adjustment:** {display_value(row.outlier_quantity_removed)} units removed\n"
             f"- **Trend:** {trend} ({row.calculated_growth_coefficient:.2f}×)\n"
             f"- **Seasonality:** {seasonality} ({row.calculated_seasonality_coefficient:.2f}×)\n"
             f"- **Stockout adjustment:** {display_value(row.estimated_lost_demand)} units\n"
@@ -252,11 +250,6 @@ if selected:
             f"- **Eligible inbound:** {display_value(row.in_transit_before_required_date)} units\n"
             f"- **Decision:** order **{display_value(row.recommended_order_qty, 0)} units** "
             f"from a raw need of {display_value(row.recommended_raw_qty)}."
-        )
-        st.caption(
-            "These transactions remain in the source data but are excluded from "
-            "regular-demand forecasting because they were identified as abnormal "
-            "one-off demand."
         )
     with st.expander("Calculation diagnostics"):
         diagnostic = calculation_diagnostics(data, supp, sku)
@@ -298,5 +291,5 @@ if selected:
             hide_index=True,
             use_container_width=True,
         )
-with st.expander("Data quality report", expanded=False):
+with st.expander("Data quality report"):
     st.dataframe(data["quality"], hide_index=True, use_container_width=True)
