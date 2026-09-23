@@ -22,7 +22,11 @@ def read_with_detected_header(path, required, sheet_name=0, max_rows=20):
         if required <= values:
             return (
                 pd.read_excel(
-                    path, sheet_name=sheet_name, header=row_index, engine="openpyxl"
+                    path,
+                    sheet_name=sheet_name,
+                    header=row_index,
+                    engine="openpyxl",
+                    dtype=object,
                 ),
                 row_index,
             )
@@ -32,6 +36,7 @@ def read_with_detected_header(path, required, sheet_name=0, max_rows=20):
 
 
 def _products(frame, supplier, sku, article, name, multiple):
+    raw_multiple = numeric(frame[multiple])
     out = pd.DataFrame(
         {
             "supplier": supplier,
@@ -39,10 +44,13 @@ def _products(frame, supplier, sku, article, name, multiple):
             "supplier_article": frame[article].astype("string").str.strip(),
             "product_name": frame[name].astype("string").str.strip(),
             "category": pd.NA,
-            "order_multiple": numeric(frame[multiple]),
+            "order_multiple": raw_multiple,
+            "moq_missing": raw_multiple.isna() | raw_multiple.le(0),
         }
     )
-    out["order_multiple"] = out["order_multiple"].fillna(1).clip(lower=1)
+    # Business fallback: ordering by individual units is the least-assumptive
+    # behavior when the supplier workbook has no usable shipment multiple.
+    out.loc[out["moq_missing"], "order_multiple"] = 1.0
     return out.dropna(subset=["sku"])
 
 
@@ -84,7 +92,9 @@ def load_monthly(path, supplier, kind):
     required = ["Номенклатура.Код", "Номенклатура"]
     f, _ = read_with_detected_header(path, required)
     value = "stock_level" if kind == "stock" else "quantity"
-    return wide_months_to_long(f, "Номенклатура.Код", value, supplier, ["Номенклатура"])
+    return wide_months_to_long(
+        f, "Номенклатура.Код", value, supplier, ["Номенклатура"]
+    ).rename(columns={"Номенклатура": "product_name"})
 
 
 def load_system_inventory(path):
