@@ -27,8 +27,6 @@ def calculation_diagnostics(data, supplier, sku):
                     "month",
                     "quantity",
                     "cleaned_quantity",
-                    "stockout_reference_demand",
-                    "estimated_lost_demand",
                     "adjusted_quantity",
                 )
                 if column in history
@@ -40,7 +38,6 @@ def calculation_diagnostics(data, supplier, sku):
         "seasonality_factor": row.calculated_seasonality_coefficient,
         "stockout_adjustment": row.stockout_adjustment,
         "final_forecast": row.forecast_monthly,
-        "forecast_source": getattr(row, "forecast_source", "neutral"),
         "forecast_horizon_days": row.forecast_horizon_days,
         "lead_time_days": row.lead_time_days,
         "safety_stock": row.safety_stock,
