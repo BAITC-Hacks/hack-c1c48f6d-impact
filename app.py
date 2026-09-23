@@ -3,6 +3,7 @@ import streamlit as st
 from src.config import Settings
 from src.pipeline import run_pipeline
 from src.export import to_csv_bytes, to_excel_bytes
+from src.diagnostics import calculation_diagnostics
 
 st.set_page_config(page_title="Supplier Replenishment", page_icon="📦", layout="wide")
 st.title("📦 Explainable supplier replenishment")
@@ -93,6 +94,20 @@ for box, label, value in zip(metrics, labels, vals):
     box.metric(label, f"{value:,.0f}")
 show = pd.DataFrame(
     {
+        "Warnings": filtered.apply(
+            lambda row: " ".join(
+                label
+                for condition, label in (
+                    (row.product_metadata_missing, "⚠ metadata"),
+                    (row.moq_missing, "⚠ MOQ"),
+                    (row.current_stock_missing, "⚠ stock"),
+                    (row.sparse_history, "⚠ sparse"),
+                    (row.outlier_quantity_removed > 0, "⚠ outlier"),
+                )
+                if condition
+            ),
+            axis=1,
+        ),
         "Supplier": filtered.supplier,
         "SKU": filtered.sku,
         "Article": filtered.supplier_article,
@@ -137,10 +152,20 @@ if selected:
     a.metric("Growth factor", f"{row.calculated_growth_coefficient:.2f}")
     b.metric("Seasonality", f"{row.calculated_seasonality_coefficient:.2f}")
     c.metric("Safety stock", f"{row.safety_stock:.1f}")
-    d.metric("Days of supply", f"{row.days_of_supply:.1f}")
+    d.metric("Days of supply", row.days_of_supply_display)
     hist = data["demand_adjusted"]
     hist = hist[(hist.supplier == supp) & (hist.sku == sku)].set_index("month")
-    if not hist.empty:
+    if hist.empty:
+        st.info("No historical demand series is available for this SKU.")
+    elif (
+        not hist[["quantity", "cleaned_quantity", "adjusted_quantity"]]
+        .fillna(0)
+        .gt(0)
+        .any()
+        .any()
+    ):
+        st.info("Historical demand is present but contains no positive regular demand.")
+    else:
         st.line_chart(hist[["quantity", "cleaned_quantity", "adjusted_quantity"]])
         st.caption(
             "Raw/reconciled monthly demand, anomaly-cleaned demand, and conservative stockout-adjusted demand."
@@ -150,12 +175,41 @@ if selected:
     if not stock.empty:
         st.line_chart(stock["stock_level"])
     st.write("Inbound shipments")
-    st.dataframe(
-        data["inbound"][
-            (data["inbound"].supplier == supp) & (data["inbound"].sku == sku)
-        ],
-        hide_index=True,
-        use_container_width=True,
-    )
+    shipments = data["inbound"][
+        (data["inbound"].supplier == supp) & (data["inbound"].sku == sku)
+    ]
+    shipments = shipments[shipments["quantity"].fillna(0).gt(0)]
+    if shipments.empty:
+        st.info("No inbound shipments found for this SKU.")
+    else:
+        st.dataframe(shipments, hide_index=True, use_container_width=True)
+    with st.expander("Calculation diagnostics"):
+        diagnostic = calculation_diagnostics(data, supp, sku)
+        labels = {
+            "baseline_demand": "Baseline demand",
+            "adjusted_demand": "Adjusted demand",
+            "outlier_quantity_removed": "Outlier adjustment",
+            "stockout_adjustment": "Stockout adjustment",
+            "growth_factor": "Growth factor",
+            "seasonality_factor": "Seasonality factor",
+            "forecast_horizon_days": "Forecast horizon (days)",
+            "lead_time_days": "Lead-time assumption (days)",
+            "safety_stock": "Safety stock",
+            "available_stock": "Available stock",
+            "eligible_inbound": "Eligible inbound",
+            "raw_requirement": "Raw requirement",
+            "moq": "MOQ",
+            "rounded_order": "Rounded order",
+        }
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {"Metric": label, "Value": diagnostic[key]}
+                    for key, label in labels.items()
+                ]
+            ),
+            hide_index=True,
+            use_container_width=True,
+        )
 with st.expander("Data quality report"):
     st.dataframe(data["quality"], hide_index=True, use_container_width=True)
