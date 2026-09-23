@@ -4,7 +4,13 @@ from src.config import Settings
 from src.pipeline import run_pipeline
 from src.export import to_csv_bytes, to_excel_bytes
 from src.diagnostics import calculation_diagnostics
-from src.presentation import display_value, representative_examples, warning_labels
+from src.presentation import (
+    ASSUMPTION_PRESETS as UI_ASSUMPTION_PRESETS,
+    assumption_preset as get_assumption_preset,
+    display_value as format_display_value,
+    representative_examples as get_representative_examples,
+    warning_labels as get_warning_labels,
+)
 
 st.set_page_config(page_title="Supplier Replenishment", page_icon="📦", layout="wide")
 st.title("📦 Explainable supplier replenishment")
@@ -14,31 +20,65 @@ st.caption(
 st.warning(
     "Customer-specific bulk-order detection is supported by the architecture but cannot currently be evaluated because customer identifiers are not present in the supplied datasets."
 )
+
+
+def apply_assumption_preset():
+    values = get_assumption_preset(st.session_state.assumption_preset)
+    for key, value in values.items():
+        st.session_state[key] = value
+
+
+def reset_standard_assumptions():
+    st.session_state.assumption_preset = "Standard"
+    apply_assumption_preset()
+
+
+for setting, value in get_assumption_preset("Standard").items():
+    st.session_state.setdefault(setting, value)
+
 with st.sidebar:
     st.header("Planning settings")
     demo_mode = st.checkbox(
         "Demo mode",
         help="Offers representative examples selected from the current calculated results.",
     )
+    st.caption(
+        "Scenario values are configurable assumptions, not partner-approved parameters."
+    )
+    st.selectbox(
+        "Assumption scenario",
+        list(UI_ASSUMPTION_PRESETS),
+        key="assumption_preset",
+        on_change=apply_assumption_preset,
+    )
+    st.button("Reset to standard assumptions", on_click=reset_standard_assumptions)
     with st.expander("Forecast & replenishment", expanded=True):
-        horizon = st.slider("Replenishment horizon (days)", 15, 120, 45)
+        horizon = st.slider("Replenishment horizon (days)", 15, 120, key="horizon_days")
         lead = st.slider(
             "Lead time assumption (days)",
             7,
             90,
-            30,
+            key="lead_time_days",
             help="No explicit supplier lead time is present; this is a configurable demo assumption.",
         )
-        service = st.slider("Safety-stock service factor", 0.0, 2.5, 1.28, 0.05)
+        service = st.slider(
+            "Safety-stock service factor",
+            0.0,
+            2.5,
+            step=0.05,
+            key="service_factor",
+        )
         stockout = st.slider(
             "Estimated stockout-month fraction",
             0.0,
             1.0,
-            0.35,
-            0.05,
+            step=0.05,
+            key="stockout_fraction",
             help="Monthly snapshots do not prove a full-month stockout.",
         )
-        outlier = st.slider("One-off robust z threshold", 3.0, 10.0, 5.0, 0.5)
+        outlier = st.slider(
+            "One-off robust z threshold", 3.0, 10.0, step=0.5, key="outlier_z"
+        )
 
 
 @st.cache_data(show_spinner="Loading and normalizing real workbooks…")
@@ -56,7 +96,14 @@ def load_dashboard(horizon, lead, service, stockout, outlier):
 
 data = load_dashboard(horizon, lead, service, stockout, outlier)
 rec = data["recommendations"].copy()
-demo_examples = representative_examples(rec) if demo_mode else {}
+portfolio_risk = data["portfolio_risk"]
+if portfolio_risk["high_impact_sku_count"]:
+    st.warning(
+        f"{portfolio_risk['high_impact_sku_count']:,} SKU(s) account individually for more than "
+        f"{Settings().concentration_threshold:.0%} of recommended units. The largest accounts for "
+        f"{portfolio_risk['largest_sku_share']:.0%}. Review high-impact recommendations before approval."
+    )
+demo_examples = get_representative_examples(rec) if demo_mode else {}
 demo_selected = None
 if demo_mode:
     st.sidebar.subheader("Representative examples")
@@ -121,7 +168,8 @@ show = pd.DataFrame(
         "MOQ": filtered.order_multiple,
         "Order": filtered.recommended_order_qty,
         "Urgency": filtered.urgency,
-        "Warnings": filtered.apply(warning_labels, axis=1),
+        "Confidence": filtered.recommendation_confidence,
+        "Warnings": filtered.apply(get_warning_labels, axis=1),
     }
 )
 st.subheader("Recommendations")
@@ -171,7 +219,10 @@ if selected:
     a, b, c, d = st.columns(4)
     a.metric("Growth factor", f"{row.calculated_growth_coefficient:.2f}")
     b.metric("Seasonality", f"{row.calculated_seasonality_coefficient:.2f}")
-    c.metric("Safety stock", f"{row.safety_stock:,.1f}")
+    c.metric(
+        "Safety stock",
+        "Unavailable" if row.variability_insufficient else f"{row.safety_stock:,.1f}",
+    )
     d.metric("Days of supply", row.days_of_supply_display)
     hist = data["demand_adjusted"]
     hist = hist[(hist.supplier == supp) & (hist.sku == sku)].set_index("month")
@@ -228,9 +279,17 @@ if selected:
     )
     with st.expander("Why this recommendation?", expanded=demo_mode):
         trend = (
-            "growth"
-            if row.calculated_growth_coefficient > 1.05
-            else ("decline" if row.calculated_growth_coefficient < 0.95 else "stable")
+            f"{row.forecast_source}-level fallback"
+            if row.forecast_source in ("category", "supplier")
+            else "not estimated — sparse history"
+            if row.forecast_source == "neutral"
+            else (
+                "growth"
+                if row.calculated_growth_coefficient > 1.05
+                else (
+                    "decline" if row.calculated_growth_coefficient < 0.95 else "stable"
+                )
+            )
         )
         seasonality = (
             "uplift"
@@ -242,14 +301,24 @@ if selected:
             )
         )
         st.markdown(
-            f"- **Anomaly adjustment:** {display_value(row.outlier_quantity_removed)} units removed\n"
-            f"- **Trend:** {trend} ({row.calculated_growth_coefficient:.2f}×)\n"
+            f"- **Historical one-off demand excluded:** "
+            f"{format_display_value(row.outlier_quantity_removed)} units across "
+            f"{int(row.anomaly_count):,} anomaly days\n"
+            f"- **Trend:** {trend}"
+            f"{'' if row.forecast_source == 'neutral' else f' ({row.calculated_growth_coefficient:.2f}×)'}\n"
             f"- **Seasonality:** {seasonality} ({row.calculated_seasonality_coefficient:.2f}×)\n"
-            f"- **Stockout adjustment:** {display_value(row.estimated_lost_demand)} units\n"
-            f"- **Current/free stock:** {display_value(row.free_stock) if not row.current_stock_missing else 'Not available (zero fallback)'}\n"
-            f"- **Eligible inbound:** {display_value(row.in_transit_before_required_date)} units\n"
-            f"- **Decision:** order **{display_value(row.recommended_order_qty, 0)} units** "
-            f"from a raw need of {display_value(row.recommended_raw_qty)}."
+            f"- **Forecast source:** {row.forecast_source}\n"
+            f"- **Stockout adjustment:** {format_display_value(row.estimated_lost_demand)} units\n"
+            f"- **Current/free stock:** {format_display_value(row.free_stock) if not row.current_stock_missing else 'Not available (zero fallback)'}\n"
+            f"- **Eligible inbound:** {format_display_value(row.in_transit_before_required_date)} units\n"
+            f"- **Decision:** order **{format_display_value(row.recommended_order_qty, 0)} units** "
+            f"from a raw need of {format_display_value(row.recommended_raw_qty)}."
+        )
+        st.caption(row.safety_stock_status + ".")
+        st.caption(
+            "These transactions remain in the source data but are excluded from "
+            "regular-demand forecasting because they were identified as abnormal "
+            "one-off demand."
         )
     with st.expander("Calculation diagnostics"):
         diagnostic = calculation_diagnostics(data, supp, sku)
@@ -262,6 +331,7 @@ if selected:
             "stockout_adjustment": "Stockout adjustment",
             "growth_factor": "Growth factor",
             "seasonality_factor": "Seasonality factor",
+            "forecast_source": "Forecast source",
             "forecast_horizon_days": "Forecast horizon (days)",
             "lead_time_days": "Lead-time assumption (days)",
             "safety_stock": "Safety stock",
@@ -278,11 +348,18 @@ if selected:
                 [
                     {
                         "Metric": label,
-                        "Value": display_value(
+                        "Value": format_display_value(
                             diagnostic[key],
                             2
                             if key in factor_keys
                             else (0 if key in whole_keys else 1),
+                        )
+                        if not (key == "safety_stock" and row.variability_insufficient)
+                        and key != "forecast_source"
+                        else (
+                            "Unavailable — insufficient history"
+                            if key == "safety_stock"
+                            else diagnostic[key]
                         ),
                     }
                     for key, label in labels.items()
@@ -291,5 +368,8 @@ if selected:
             hide_index=True,
             use_container_width=True,
         )
-with st.expander("Data quality report"):
+with st.expander("Data quality report", expanded=False):
+    st.caption(
+        f"Top 5 SKUs represent {portfolio_risk['top_five_share']:.1%} of total recommended units."
+    )
     st.dataframe(data["quality"], hide_index=True, use_container_width=True)

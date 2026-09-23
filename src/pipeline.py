@@ -17,6 +17,7 @@ from .inventory import latest_iek_inventory, summarize_inbound
 from .replenishment import calculate_recommendation
 from .quality import data_quality_report
 from .explanations import build_rationale
+from .risk import add_recommendation_risk
 
 
 def _dedupe_products(products):
@@ -118,6 +119,68 @@ def reconcile_monthly_demand(monthly_sales, transaction_monthly):
     return combined
 
 
+def apply_sparse_history_safeguard(metric, observation_count):
+    """Neutralize unsupported multipliers while retaining the robust baseline."""
+    if observation_count >= 3:
+        return metric
+    protected = metric.copy()
+    protected.update(
+        {
+            "calculated_growth_coefficient": 1.0,
+            "calculated_seasonality_coefficient": 1.0,
+            "seasonality_source": "sparse_history_neutral_fallback",
+            "forecast_monthly": protected["baseline_demand"],
+        }
+    )
+    return protected
+
+
+def forecast_with_hierarchy(
+    sku_history,
+    category_history,
+    supplier_history,
+    target_month,
+    supplier_seasonality,
+    recent_months=6,
+    trend_caps=(0.70, 1.50),
+):
+    """Forecast from the narrowest history with enough meaningful observations."""
+    sku_observations = int(sku_history.gt(0).sum())
+    if sku_observations >= 3:
+        metric = forecast_one(
+            sku_history,
+            target_month,
+            supplier_seasonality,
+            recent_months,
+            trend_caps,
+        )
+        return {**metric, "forecast_source": "sku"}
+    for source, history in (
+        ("category", category_history),
+        ("supplier", supplier_history),
+    ):
+        if history is not None and int(history.gt(0).sum()) >= 3:
+            metric = forecast_one(
+                history,
+                target_month,
+                supplier_seasonality,
+                recent_months,
+                trend_caps,
+            )
+            return {**metric, "forecast_source": source}
+    metric = forecast_one(
+        sku_history,
+        target_month,
+        1.0,
+        recent_months,
+        trend_caps,
+    )
+    return {
+        **apply_sparse_history_safeguard(metric, sku_observations),
+        "forecast_source": "neutral",
+    }
+
+
 def load_normalized_sources():
     products = pd.concat(
         [
@@ -213,6 +276,27 @@ def run_pipeline(settings=Settings()):
         anomaly_count=("anomaly_count", "sum"),
     )
     base = base.merge(agg, on=["supplier", "sku"], how="left")
+    demand_context = adjusted.merge(
+        base[["supplier", "sku", "category"]],
+        on=["supplier", "sku"],
+        how="left",
+    )
+    category_demand = (
+        demand_context.dropna(subset=["category"])
+        .groupby(["supplier", "category", "month"])["adjusted_quantity"]
+        .median()
+    )
+    supplier_demand = demand_context.groupby(["supplier", "month"])[
+        "adjusted_quantity"
+    ].median()
+    category_histories = {
+        key: values.droplevel(["supplier", "category"])
+        for key, values in category_demand.groupby(level=["supplier", "category"])
+    }
+    supplier_histories = {
+        key: values.droplevel("supplier")
+        for key, values in supplier_demand.groupby(level="supplier")
+    }
     rows = []
     for row in base.itertuples(index=False):
         hist = adjusted[
@@ -224,18 +308,28 @@ def run_pipeline(settings=Settings()):
             else pd.Series(dtype=float)
         )
         sf = float(seasonal.get((row.supplier, required.month), 1.0))
-        metric = forecast_one(
+        category_series = (
+            category_histories.get((row.supplier, row.category))
+            if pd.notna(row.category)
+            else None
+        )
+        supplier_series = supplier_histories.get(row.supplier)
+        metric = forecast_with_hierarchy(
             series,
+            category_series,
+            supplier_series,
             required.month,
             sf,
             settings.recent_months,
             (settings.trend_cap_low, settings.trend_cap_high),
         )
+        observation_count = int(series.gt(0).sum())
         std = (
             float(series.iloc[-settings.recent_months :].std(ddof=0))
             if len(series)
             else 0
         )
+        variability_insufficient = observation_count < 2
         free = getattr(row, "free_stock", np.nan)
         current = getattr(row, "current_stock", 0)
         free = current if pd.isna(free) else free
@@ -292,9 +386,23 @@ def run_pipeline(settings=Settings()):
         values["forecast_horizon_days"] = settings.horizon_days
         values["lead_time_days"] = settings.lead_time_days
         values["sparse_history"] = int((series > 0).sum()) < 3
+        values["history_observation_count"] = observation_count
+        values["variability_insufficient"] = variability_insufficient
+        values["safety_stock_status"] = (
+            "Safety stock unavailable because history is insufficient"
+            if variability_insufficient
+            else (
+                "Safety stock = 0 because demand is stable"
+                if values["safety_stock"] == 0
+                else "Safety stock calculated from observed demand variability"
+            )
+        )
         values["rationale"] = build_rationale(values)
         rows.append(values)
     recommendations = pd.DataFrame(rows)
+    recommendations, portfolio_risk = add_recommendation_risk(
+        recommendations, settings.concentration_threshold
+    )
     quality = data_quality_report(
         data["products"],
         data["monthly_sales"],
@@ -309,6 +417,7 @@ def run_pipeline(settings=Settings()):
             "demand_adjusted": adjusted,
             "recommendations": recommendations,
             "quality": quality,
+            "portfolio_risk": portfolio_risk,
         }
     )
     return data
