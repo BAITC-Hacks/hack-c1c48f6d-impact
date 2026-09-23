@@ -27,6 +27,34 @@ Large values are real transaction candidates as well as footer totals: invalid f
 
 No customer identifier exists. Customer concentration cannot be evaluated. Monthly stock values are snapshots and cannot establish full-month stockout duration. Explicit supplier lead times are absent.
 
+## Demo issue root-cause audit
+
+* **Missing product fields:** the recommendation universe was an outer join of only
+  MOQ and inventory. Inventory-only rows therefore had no fallback to the product
+  labels present in monthly sales or transactions. All workbook data rows are now
+  read as objects before normalizing trimmed string keys (so leading zeroes and
+  underscores survive), and metadata is resolved in the fixed order MOQ master,
+  inventory, monthly sales, then transactions. Supplier and SKU are both part of
+  every match and unmatched composite keys are reported.
+* **Invalid MOQ:** the loader previously replaced null/zero multiples with one and
+  discarded the fact that a fallback occurred. The fallback remains one unit—the
+  least-assumptive order increment—but is now documented, carried as
+  `moq_missing`, counted in quality output, and explained in every affected row.
+* **Extreme forecasts:** valid invoices include a 210,000-unit IEK movement and a
+  90,000-unit SystemElectric movement. They were not sign errors or unit
+  conversions. The transaction/monthly reconciliation already intended to prefer
+  transaction detail, but did not enforce unique monthly keys or retain both raw
+  and cleaned totals for audit. Reconciliation now aggregates duplicate source
+  month keys, validates a one-to-one merge, never sums the two sources, and exposes
+  the raw, removed, stockout, growth, seasonality, and final forecast trace. Robust
+  daily one-off detection excludes isolated extreme orders; growth remains capped
+  at the configured 0.70–1.50 range. No arbitrary final-forecast cap is applied.
+* **Blank/technical UI states:** charts and inbound tables were rendered whenever
+  a row container existed, even if it had no useful observations, and zero demand
+  exposed the internal infinite days-of-supply value. Explicit no-history,
+  all-zero-history, no-inbound, and `No current demand` states now replace those
+  technical displays.
+
 ## Key nulls and duplicates
 
 A full key scan (after the detected header) found:

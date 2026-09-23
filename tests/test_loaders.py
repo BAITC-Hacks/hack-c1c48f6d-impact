@@ -7,6 +7,12 @@ def test_sku_normalization_preserves_underscore():
     assert normalize_sku(" 081100768_ ") == "081100768_"
 
 
+def test_sku_normalization_preserves_leading_zero_for_joins():
+    left = pd.DataFrame({"sku": [normalize_sku(" 00123_ ")]})
+    right = pd.DataFrame({"sku": [normalize_sku("00123_")], "name": ["product"]})
+    assert left.merge(right, on="sku").iloc[0]["name"] == "product"
+
+
 def test_russian_month_parser_and_wide_conversion():
     assert parse_russian_month("Сентябрь 2026 г.") == pd.Timestamp("2026-09-01")
     frame = pd.DataFrame(
