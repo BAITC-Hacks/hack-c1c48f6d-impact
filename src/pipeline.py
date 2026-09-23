@@ -214,6 +214,27 @@ def run_pipeline(settings=Settings()):
         anomaly_count=("anomaly_count", "sum"),
     )
     base = base.merge(agg, on=["supplier", "sku"], how="left")
+    demand_context = adjusted.merge(
+        base[["supplier", "sku", "category"]],
+        on=["supplier", "sku"],
+        how="left",
+    )
+    category_demand = (
+        demand_context.dropna(subset=["category"])
+        .groupby(["supplier", "category", "month"])["adjusted_quantity"]
+        .median()
+    )
+    supplier_demand = demand_context.groupby(["supplier", "month"])[
+        "adjusted_quantity"
+    ].median()
+    category_histories = {
+        key: values.droplevel(["supplier", "category"])
+        for key, values in category_demand.groupby(level=["supplier", "category"])
+    }
+    supplier_histories = {
+        key: values.droplevel("supplier")
+        for key, values in supplier_demand.groupby(level="supplier")
+    }
     rows = []
     for row in base.itertuples(index=False):
         hist = adjusted[
@@ -225,8 +246,16 @@ def run_pipeline(settings=Settings()):
             else pd.Series(dtype=float)
         )
         sf = float(seasonal.get((row.supplier, required.month), 1.0))
-        metric = forecast_one(
+        category_series = (
+            category_histories.get((row.supplier, row.category))
+            if pd.notna(row.category)
+            else None
+        )
+        supplier_series = supplier_histories.get(row.supplier)
+        metric = forecast_with_hierarchy(
             series,
+            category_series,
+            supplier_series,
             required.month,
             sf,
             settings.recent_months,

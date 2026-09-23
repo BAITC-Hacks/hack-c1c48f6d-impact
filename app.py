@@ -27,7 +27,7 @@ def reset_standard_assumptions():
     apply_assumption_preset()
 
 
-for setting, value in assumption_preset("Standard").items():
+for setting, value in presentation.assumption_preset("Standard").items():
     st.session_state.setdefault(setting, value)
 
 with st.sidebar:
