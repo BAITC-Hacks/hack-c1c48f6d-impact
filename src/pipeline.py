@@ -17,6 +17,7 @@ from .inventory import latest_iek_inventory, summarize_inbound
 from .replenishment import calculate_recommendation
 from .quality import data_quality_report
 from .explanations import build_rationale
+from .risk import add_recommendation_risk
 
 
 def _dedupe_products(products):
@@ -231,11 +232,14 @@ def run_pipeline(settings=Settings()):
             settings.recent_months,
             (settings.trend_cap_low, settings.trend_cap_high),
         )
+        observation_count = int(series.gt(0).sum())
+        metric = apply_sparse_history_safeguard(metric, observation_count)
         std = (
             float(series.iloc[-settings.recent_months :].std(ddof=0))
             if len(series)
             else 0
         )
+        variability_insufficient = observation_count < 2
         free = getattr(row, "free_stock", np.nan)
         current = getattr(row, "current_stock", 0)
         free = current if pd.isna(free) else free
@@ -295,6 +299,9 @@ def run_pipeline(settings=Settings()):
         values["rationale"] = build_rationale(values)
         rows.append(values)
     recommendations = pd.DataFrame(rows)
+    recommendations, portfolio_risk = add_recommendation_risk(
+        recommendations, settings.concentration_threshold
+    )
     quality = data_quality_report(
         data["products"],
         data["monthly_sales"],
@@ -309,6 +316,7 @@ def run_pipeline(settings=Settings()):
             "demand_adjusted": adjusted,
             "recommendations": recommendations,
             "quality": quality,
+            "portfolio_risk": portfolio_risk,
         }
     )
     return data

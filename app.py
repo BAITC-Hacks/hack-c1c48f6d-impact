@@ -14,6 +14,22 @@ st.caption(
 st.warning(
     "Customer-specific bulk-order detection is supported by the architecture but cannot currently be evaluated because customer identifiers are not present in the supplied datasets."
 )
+
+
+def apply_assumption_preset():
+    values = assumption_preset(st.session_state.assumption_preset)
+    for key, value in values.items():
+        st.session_state[key] = value
+
+
+def reset_standard_assumptions():
+    st.session_state.assumption_preset = "Standard"
+    apply_assumption_preset()
+
+
+for setting, value in assumption_preset("Standard").items():
+    st.session_state.setdefault(setting, value)
+
 with st.sidebar:
     st.header("Planning settings")
     demo_mode = st.checkbox(
@@ -21,24 +37,32 @@ with st.sidebar:
         help="Offers representative examples selected from the current calculated results.",
     )
     with st.expander("Forecast & replenishment", expanded=True):
-        horizon = st.slider("Replenishment horizon (days)", 15, 120, 45)
+        horizon = st.slider("Replenishment horizon (days)", 15, 120, key="horizon_days")
         lead = st.slider(
             "Lead time assumption (days)",
             7,
             90,
-            30,
+            key="lead_time_days",
             help="No explicit supplier lead time is present; this is a configurable demo assumption.",
         )
-        service = st.slider("Safety-stock service factor", 0.0, 2.5, 1.28, 0.05)
+        service = st.slider(
+            "Safety-stock service factor",
+            0.0,
+            2.5,
+            step=0.05,
+            key="service_factor",
+        )
         stockout = st.slider(
             "Estimated stockout-month fraction",
             0.0,
             1.0,
-            0.35,
-            0.05,
+            step=0.05,
+            key="stockout_fraction",
             help="Monthly snapshots do not prove a full-month stockout.",
         )
-        outlier = st.slider("One-off robust z threshold", 3.0, 10.0, 5.0, 0.5)
+        outlier = st.slider(
+            "One-off robust z threshold", 3.0, 10.0, step=0.5, key="outlier_z"
+        )
 
 
 @st.cache_data(show_spinner="Loading and normalizing real workbooks…")
