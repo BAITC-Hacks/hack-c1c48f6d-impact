@@ -36,3 +36,4 @@ class Settings:
     recent_months: int = 6
     trend_cap_low: float = 0.70
     trend_cap_high: float = 1.50
+    concentration_threshold: float = 0.20
