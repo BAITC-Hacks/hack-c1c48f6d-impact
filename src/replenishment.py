@@ -32,6 +32,9 @@ def calculate_recommendation(
     recommended = round_up_to_multiple(raw, order_multiple)
     daily = forecast / 30
     days_supply = available / daily if daily > 0 else np.inf
+    days_supply_display = (
+        f"{days_supply:.1f}" if np.isfinite(days_supply) else "No current demand"
+    )
     if available <= 0 and forecast > 0:
         urgency = "CRITICAL"
     elif days_supply < lead_time_days:
@@ -48,5 +51,6 @@ def calculate_recommendation(
         "recommended_raw_qty": raw,
         "recommended_order_qty": recommended,
         "days_of_supply": days_supply,
+        "days_of_supply_display": days_supply_display,
         "urgency": urgency,
     }

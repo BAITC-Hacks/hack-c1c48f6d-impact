@@ -1,5 +1,3 @@
-
-
 def estimate_stockout_demand(demand, stock, fraction=0.35):
     merged = demand.merge(
         stock[["supplier", "sku", "month", "stock_level"]],
