@@ -119,22 +119,6 @@ def reconcile_monthly_demand(monthly_sales, transaction_monthly):
     return combined
 
 
-def apply_sparse_history_safeguard(metric, observation_count):
-    """Neutralize unsupported multipliers while retaining the robust baseline."""
-    if observation_count >= 3:
-        return metric
-    protected = metric.copy()
-    protected.update(
-        {
-            "calculated_growth_coefficient": 1.0,
-            "calculated_seasonality_coefficient": 1.0,
-            "seasonality_source": "sparse_history_neutral_fallback",
-            "forecast_monthly": protected["baseline_demand"],
-        }
-    )
-    return protected
-
-
 def load_normalized_sources():
     products = pd.concat(
         [
@@ -312,17 +296,6 @@ def run_pipeline(settings=Settings()):
         values["forecast_horizon_days"] = settings.horizon_days
         values["lead_time_days"] = settings.lead_time_days
         values["sparse_history"] = int((series > 0).sum()) < 3
-        values["history_observation_count"] = observation_count
-        values["variability_insufficient"] = variability_insufficient
-        values["safety_stock_status"] = (
-            "Safety stock unavailable because history is insufficient"
-            if variability_insufficient
-            else (
-                "Safety stock = 0 because demand is stable"
-                if values["safety_stock"] == 0
-                else "Safety stock calculated from observed demand variability"
-            )
-        )
         values["rationale"] = build_rationale(values)
         rows.append(values)
     recommendations = pd.DataFrame(rows)
