@@ -23,6 +23,26 @@ def test_moq_rounding_and_zero_fallback():
     assert round_up_to_multiple(47, 0) == 47
 
 
+def test_missing_moq_fallback_is_explicit_and_never_nan_in_rationale():
+    values = {
+        **rec(20, 10),
+        "free_stock": 20,
+        "reserved_stock": 0,
+        "in_transit_before_required_date": 10,
+        "order_multiple": float("nan"),
+        "moq_missing": True,
+    }
+    rationale = build_rationale(values)
+    assert "MOQ unavailable; fallback multiple 1 used." in rationale
+    assert "nan" not in rationale.lower()
+
+
+def test_zero_demand_has_business_friendly_days_of_supply():
+    result = calculate_recommendation(0, 0, 10, 0, 0, 1)
+    assert result["days_of_supply_display"] == "No current demand"
+    assert "inf" not in result["days_of_supply_display"].lower()
+
+
 def test_stock_increase_cannot_increase_order():
     assert rec(50)["recommended_order_qty"] <= rec(20)["recommended_order_qty"]
 
