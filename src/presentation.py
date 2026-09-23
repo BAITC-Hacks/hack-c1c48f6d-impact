@@ -7,7 +7,37 @@ WARNING_RULES = (
     ("current_stock_missing", "Missing stock"),
     ("sparse_history", "Sparse history"),
     ("outlier_quantity_removed", "Outlier-adjusted"),
+    ("variability_insufficient", "Safety stock uncertain"),
+    ("high_portfolio_impact", "High portfolio impact — review"),
 )
+
+ASSUMPTION_PRESETS = {
+    "Standard": {
+        "horizon_days": 45,
+        "lead_time_days": 30,
+        "service_factor": 1.28,
+        "stockout_fraction": 0.35,
+        "outlier_z": 5.0,
+    },
+    "Conservative": {
+        "horizon_days": 30,
+        "lead_time_days": 21,
+        "service_factor": 1.0,
+        "stockout_fraction": 0.20,
+        "outlier_z": 4.0,
+    },
+    "Stress test": {
+        "horizon_days": 60,
+        "lead_time_days": 45,
+        "service_factor": 1.65,
+        "stockout_fraction": 0.50,
+        "outlier_z": 6.0,
+    },
+}
+
+
+def assumption_preset(name):
+    return ASSUMPTION_PRESETS[name].copy()
 
 
 def warning_labels(row):
@@ -41,9 +71,25 @@ def representative_examples(recommendations):
         candidates = recommendations.loc[score.gt(threshold)].assign(_score=score)
         if candidates.empty:
             continue
+        candidates["_metadata_complete"] = ~candidates.get(
+            "product_metadata_missing", pd.Series(False, index=candidates.index)
+        ).fillna(True)
+        candidates["_valid_moq"] = ~candidates.get(
+            "moq_missing", pd.Series(False, index=candidates.index)
+        ).fillna(True)
+        candidates["_supported_history"] = ~candidates.get(
+            "sparse_history", pd.Series(False, index=candidates.index)
+        ).fillna(True)
         chosen = candidates.sort_values(
-            ["_score", "supplier", "sku"],
-            ascending=[False, True, True],
+            [
+                "_metadata_complete",
+                "_valid_moq",
+                "_supported_history",
+                "_score",
+                "supplier",
+                "sku",
+            ],
+            ascending=[False, False, False, False, True, True],
             kind="stable",
         ).iloc[0]
         examples[label] = f"{chosen.supplier} · {chosen.sku}"
